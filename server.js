@@ -16,19 +16,23 @@ app.use(cors());
 
 app.use(express.json());
 
-// Verificação da variável de ambiente
-if (!process.env.MERCADOPAGO_ACCESS_TOKEN) {
-  console.error('ERRO: MERCADOPAGO_ACCESS_TOKEN não está definido nas variáveis de ambiente');
-}
-
 // Configuração do MercadoPago
 let mercadopagoConfigured = false;
 try {
+  // Token hardcoded para teste
+  const accessToken = 'APP_USR-3116777758882381-060722-f41a1e898893ace269b2fc4ca1db3d2a-517719294'; // Substitua pelo seu token real
+  
   mercadopago.configure({
-    access_token: 'APP_USR-3116777758882381-060722-f41a1e898893ace269b2fc4ca1db3d2a-517719294'
+    access_token: accessToken
   });
-  mercadopagoConfigured = true;
-  console.log('MercadoPago configurado com sucesso');
+  
+  // Verifica se a configuração foi bem sucedida
+  if (mercadopago.preferences) {
+    mercadopagoConfigured = true;
+    console.log('MercadoPago configurado com sucesso');
+  } else {
+    console.error('MercadoPago não foi inicializado corretamente');
+  }
 } catch (error) {
   console.error('Erro ao configurar MercadoPago:', error);
 }
@@ -39,7 +43,7 @@ const checkMercadoPago = (req, res, next) => {
     console.error('Tentativa de usar MercadoPago sem configuração');
     return res.status(500).json({ 
       error: 'MercadoPago não está configurado corretamente',
-      details: 'Verifique se MERCADOPAGO_ACCESS_TOKEN está definido'
+      details: 'Verifique a configuração do MercadoPago'
     });
   }
   next();
@@ -79,7 +83,7 @@ app.get('/api/health', (req, res) => {
       timestamp: new Date().toISOString(),
       mercadopago: {
         configured: mercadopagoConfigured,
-        token_defined: !!process.env.MERCADOPAGO_ACCESS_TOKEN
+        preferences_available: !!mercadopago.preferences
       }
     });
   } catch (error) {
@@ -135,6 +139,11 @@ app.post('/api/create-preference', checkMercadoPago, async (req, res) => {
     };
 
     console.log('Enviando preferência para MercadoPago:', preference);
+    
+    if (!mercadopago.preferences) {
+      throw new Error('MercadoPago preferences não está disponível');
+    }
+    
     const response = await mercadopago.preferences.create(preference);
     console.log('Preferência criada com sucesso:', response.body.id);
     
@@ -148,7 +157,8 @@ app.post('/api/create-preference', checkMercadoPago, async (req, res) => {
     res.status(500).json({ 
       error: error.message,
       details: error.response?.data || 'Sem detalhes adicionais',
-      mercadopago_configured: mercadopagoConfigured
+      mercadopago_configured: mercadopagoConfigured,
+      preferences_available: !!mercadopago.preferences
     });
   }
 });
@@ -339,7 +349,7 @@ if (process.env.NODE_ENV !== 'production') {
   app.listen(PORT, () => {
     console.log(`Servidor rodando na porta ${PORT}`);
     console.log('Ambiente:', process.env.NODE_ENV);
-    console.log('MercadoPago Access Token configurado:', !!process.env.MERCADOPAGO_ACCESS_TOKEN);
     console.log('MercadoPago configurado:', mercadopagoConfigured);
+    console.log('MercadoPago preferences disponível:', !!mercadopago.preferences);
   });
 }
