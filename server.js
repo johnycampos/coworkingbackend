@@ -25,7 +25,7 @@ if (!process.env.MERCADOPAGO_ACCESS_TOKEN) {
 let mercadopagoConfigured = false;
 try {
   mercadopago.configure({
-    access_token: process.env.MERCADO_PAGO_ACCESS_TOKEN
+    access_token: process.env.MERCADOPAGO_ACCESS_TOKEN
   });
   mercadopagoConfigured = true;
   console.log('MercadoPago configurado com sucesso');
