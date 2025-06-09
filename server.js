@@ -70,7 +70,7 @@ app.use((err, req, res, next) => {
 });
 
 // Rota para criar preferência de pagamento
-app.post('/api/create-preference', checkMercadoPago, async (req, res) => {
+app.post('/api/create-preference', async (req, res) => {
   try {
     console.log('Criando preferência com dados:', req.body);
     const { title, price, quantity } = req.body;
