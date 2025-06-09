@@ -5,6 +5,12 @@ require('dotenv').config();
 
 const app = express();
 
+// Middleware para log de requisições
+app.use((req, res, next) => {
+  console.log(`[${new Date().toISOString()}] ${req.method} ${req.url}`);
+  next();
+});
+
 // Configuração do CORS
 app.use(cors());
 
@@ -18,9 +24,14 @@ if (!process.env.MERCADO_PAGO_ACCESS_TOKEN) {
 }
 
 // Configuração do MercadoPago
-mercadopago.configure({
-  access_token: process.env.MERCADO_PAGO_ACCESS_TOKEN
-});
+try {
+  mercadopago.configure({
+    access_token: process.env.MERCADO_PAGO_ACCESS_TOKEN
+  });
+  console.log('MercadoPago configurado com sucesso');
+} catch (error) {
+  console.error('Erro ao configurar MercadoPago:', error);
+}
 
 // Dados de teste para cartão Visa
 const TEST_CARD = {
@@ -34,6 +45,17 @@ const TEST_CARD = {
     number: '12345678909'
   }
 };
+
+// Middleware de tratamento de erros global
+app.use((err, req, res, next) => {
+  console.error('Erro global:', err);
+  console.error('Stack trace:', err.stack);
+  res.status(500).json({
+    error: 'Erro interno do servidor',
+    message: err.message,
+    stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
+  });
+});
 
 // Rota para criar preferência de pagamento
 app.post('/api/create-payment', async (req, res) => {
@@ -97,7 +119,11 @@ app.post('/api/create-payment', async (req, res) => {
     });
   } catch (error) {
     console.error('Erro ao criar preferência:', error);
-    res.status(500).json({ error: error.message });
+    console.error('Stack trace:', error.stack);
+    res.status(500).json({ 
+      error: error.message,
+      details: error.response?.data || 'Sem detalhes adicionais'
+    });
   }
 });
 
@@ -201,7 +227,11 @@ app.post('/api/create-payment/process', async (req, res) => {
     }
   } catch (error) {
     console.error('Erro ao processar pagamento:', error);
-    res.status(500).json({ error: error.message });
+    console.error('Stack trace:', error.stack);
+    res.status(500).json({ 
+      error: error.message,
+      details: error.response?.data || 'Sem detalhes adicionais'
+    });
   }
 });
 
@@ -244,20 +274,22 @@ app.post('/api/test-payment', async (req, res) => {
 // Rota para webhook
 app.post('/api/webhook', async (req, res) => {
   try {
+    console.log('Webhook recebido:', req.body);
     const { type, data } = req.body;
-
+    
     if (type === 'payment') {
       const payment = await mercadopago.payment.findById(data.id);
-      console.log('Webhook - Pagamento:', payment.body);
-
-      // Aqui você pode processar o pagamento conforme necessário
-      // Por exemplo, atualizar o status da reserva no banco de dados
+      console.log('Detalhes do pagamento:', payment);
     }
-
+    
     res.status(200).send('OK');
   } catch (error) {
     console.error('Erro no webhook:', error);
-    res.status(500).json({ error: error.message });
+    console.error('Stack trace:', error.stack);
+    res.status(500).json({ 
+      error: error.message,
+      details: error.response?.data || 'Sem detalhes adicionais'
+    });
   }
 });
 
@@ -274,23 +306,16 @@ app.get('/api/payment/:id', async (req, res) => {
 
 // Rota de health check
 app.get('/api/health', (req, res) => {
-  const healthcheck = {
-    status: 'ok',
-    timestamp: new Date().toISOString(),
-    uptime: process.uptime(),
-    environment: process.env.NODE_ENV || 'development',
-    memory: process.memoryUsage(),
-    mercadopago: {
-      configured: !!process.env.MERCADO_PAGO_ACCESS_TOKEN
-    }
-  };
-
   try {
-    res.json(healthcheck);
+    console.log('Health check realizado');
+    res.status(200).json({ 
+      status: 'ok',
+      environment: process.env.NODE_ENV,
+      timestamp: new Date().toISOString()
+    });
   } catch (error) {
-    healthcheck.status = 'error';
-    healthcheck.error = error.message;
-    res.status(500).json(healthcheck);
+    console.error('Erro no health check:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -302,5 +327,7 @@ if (process.env.NODE_ENV !== 'production') {
   const PORT = process.env.PORT || 5000;
   app.listen(PORT, () => {
     console.log(`Servidor rodando na porta ${PORT}`);
+    console.log('Ambiente:', process.env.NODE_ENV);
+    console.log('MercadoPago Access Token configurado:', !!process.env.MERCADO_PAGO_ACCESS_TOKEN);
   });
 }
