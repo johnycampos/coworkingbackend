@@ -69,37 +69,78 @@ app.use((err, req, res, next) => {
   });
 });
 
+// Rota de health check
+app.get('/api/health', (req, res) => {
+  try {
+    console.log('Health check realizado');
+    res.status(200).json({ 
+      status: 'ok',
+      environment: process.env.NODE_ENV,
+      timestamp: new Date().toISOString(),
+      mercadopago: {
+        configured: mercadopagoConfigured,
+        token_defined: !!process.env.MERCADOPAGO_ACCESS_TOKEN
+      }
+    });
+  } catch (error) {
+    console.error('Erro no health check:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Rota para criar preferência de pagamento
-app.post('/api/create-preference', async (req, res) => {
+app.post('/api/create-preference', checkMercadoPago, async (req, res) => {
   try {
     console.log('Criando preferência com dados:', req.body);
-    const { title, price, quantity } = req.body;
+    const { amount, description, payer } = req.body;
 
-    if (!mercadopago.preferences) {
-      throw new Error('MercadoPago preferences não está disponível');
+    if (!amount || !description) {
+      return res.status(400).json({ 
+        error: 'Dados inválidos',
+        details: 'amount e description são obrigatórios'
+      });
     }
 
     const preference = {
       items: [
         {
-          title: title,
-          unit_price: Number(price),
-          quantity: Number(quantity),
+          title: description,
+          unit_price: Number(amount),
+          quantity: 1,
+          currency_id: 'BRL'
         }
       ],
+      payer: {
+        name: payer?.name,
+        email: payer?.email,
+        identification: {
+          type: payer?.identification?.type || 'CPF',
+          number: payer?.identification?.number
+        }
+      },
       back_urls: {
         success: "https://coworking-navy.vercel.app/success",
         failure: "https://coworking-navy.vercel.app/failure",
         pending: "https://coworking-navy.vercel.app/pending"
       },
       auto_return: "approved",
+      payment_methods: {
+        excluded_payment_methods: [],
+        excluded_payment_types: [],
+        installments: 1
+      },
+      statement_descriptor: "COWORKING",
+      external_reference: "COWORKING-" + Date.now(),
+      binary_mode: true
     };
 
     console.log('Enviando preferência para MercadoPago:', preference);
     const response = await mercadopago.preferences.create(preference);
     console.log('Preferência criada com sucesso:', response.body.id);
+    
     res.json({
-      id: response.body.id
+      id: response.body.id,
+      init_point: response.body.init_point
     });
   } catch (error) {
     console.error('Erro ao criar preferência:', error);
@@ -285,25 +326,6 @@ app.get('/api/payment/:id', async (req, res) => {
     res.json(payment.body);
   } catch (error) {
     console.error('Erro ao verificar pagamento:', error);
-    res.status(500).json({ error: error.message });
-  }
-});
-
-// Rota de health check
-app.get('/api/health', (req, res) => {
-  try {
-    console.log('Health check realizado');
-    res.status(200).json({ 
-      status: 'ok',
-      environment: process.env.NODE_ENV,
-      timestamp: new Date().toISOString(),
-      mercadopago: {
-        configured: mercadopagoConfigured,
-        token_defined: !!process.env.MERCADOPAGO_ACCESS_TOKEN
-      }
-    });
-  } catch (error) {
-    console.error('Erro no health check:', error);
     res.status(500).json({ error: error.message });
   }
 });
