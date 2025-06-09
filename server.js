@@ -16,22 +16,34 @@ app.use(cors());
 
 app.use(express.json());
 
-// Verificação do token do MercadoPago
-if (!process.env.MERCADO_PAGO_ACCESS_TOKEN) {
-  console.error('ERRO: Token do MercadoPago não encontrado!');
-  console.error('Por favor, crie um arquivo .env com a variável MERCADO_PAGO_ACCESS_TOKEN');
-  process.exit(1);
+// Verificação da variável de ambiente
+if (!process.env.MERCADOPAGO_ACCESS_TOKEN) {
+  console.error('ERRO: MERCADOPAGO_ACCESS_TOKEN não está definido nas variáveis de ambiente');
 }
 
 // Configuração do MercadoPago
+let mercadopagoConfigured = false;
 try {
   mercadopago.configure({
     access_token: process.env.MERCADO_PAGO_ACCESS_TOKEN
   });
+  mercadopagoConfigured = true;
   console.log('MercadoPago configurado com sucesso');
 } catch (error) {
   console.error('Erro ao configurar MercadoPago:', error);
 }
+
+// Middleware para verificar se o MercadoPago está configurado
+const checkMercadoPago = (req, res, next) => {
+  if (!mercadopagoConfigured) {
+    console.error('Tentativa de usar MercadoPago sem configuração');
+    return res.status(500).json({ 
+      error: 'MercadoPago não está configurado corretamente',
+      details: 'Verifique se MERCADOPAGO_ACCESS_TOKEN está definido'
+    });
+  }
+  next();
+};
 
 // Dados de teste para cartão Visa
 const TEST_CARD = {
@@ -58,71 +70,44 @@ app.use((err, req, res, next) => {
 });
 
 // Rota para criar preferência de pagamento
-app.post('/api/create-payment', async (req, res) => {
+app.post('/api/create-preference', checkMercadoPago, async (req, res) => {
   try {
-    const { amount, description, payer } = req.body;
+    console.log('Criando preferência com dados:', req.body);
+    const { title, price, quantity } = req.body;
 
-    // Validação do valor da transação
-    if (!amount || isNaN(Number(amount))) {
-      return res.status(400).json({ error: 'Valor da transação inválido' });
+    if (!mercadopago.preferences) {
+      throw new Error('MercadoPago preferences não está disponível');
     }
 
-    // URLs de retorno baseadas no ambiente
-    const baseUrl = process.env.NODE_ENV === 'production' 
-      ? 'https://coworking-navy.vercel.app/' 
-      : 'http://localhost:5173';
-
-    // Criar preferência de pagamento
     const preference = {
       items: [
         {
-          title: description || 'Reserva de Coworking',
-          unit_price: Number(amount),
-          quantity: 1,
-          currency_id: 'BRL'
+          title: title,
+          unit_price: Number(price),
+          quantity: Number(quantity),
         }
       ],
-      payer: {
-        name: payer?.name,
-        email: payer?.email,
-        identification: {
-          type: payer?.identification?.type || 'CPF',
-          number: payer?.identification?.number
-        }
-      },
       back_urls: {
-        success: `${baseUrl}/payment-success`,
-        failure: `${baseUrl}/payment-failure`,
-        pending: `${baseUrl}/payment-pending`
+        success: "https://coworking-navy.vercel.app/success",
+        failure: "https://coworking-navy.vercel.app/failure",
+        pending: "https://coworking-navy.vercel.app/pending"
       },
-      payment_methods: {
-        excluded_payment_methods: [],
-        excluded_payment_types: [],
-        installments: 1
-      },
-      notification_url: process.env.NODE_ENV === 'production'
-        ? 'https://seu-backend.vercel.app/api/webhook'
-        : 'http://localhost:3001/api/webhook',
-      statement_descriptor: "COWORKING",
-      external_reference: "COWORKING-" + Date.now(),
-      binary_mode: true
+      auto_return: "approved",
     };
 
-    console.log('Criando preferência:', preference);
-
+    console.log('Enviando preferência para MercadoPago:', preference);
     const response = await mercadopago.preferences.create(preference);
-    console.log('Preferência criada:', response.body);
-
+    console.log('Preferência criada com sucesso:', response.body.id);
     res.json({
-      id: response.body.id,
-      init_point: response.body.init_point
+      id: response.body.id
     });
   } catch (error) {
     console.error('Erro ao criar preferência:', error);
     console.error('Stack trace:', error.stack);
     res.status(500).json({ 
       error: error.message,
-      details: error.response?.data || 'Sem detalhes adicionais'
+      details: error.response?.data || 'Sem detalhes adicionais',
+      mercadopago_configured: mercadopagoConfigured
     });
   }
 });
@@ -311,7 +296,11 @@ app.get('/api/health', (req, res) => {
     res.status(200).json({ 
       status: 'ok',
       environment: process.env.NODE_ENV,
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      mercadopago: {
+        configured: mercadopagoConfigured,
+        token_defined: !!process.env.MERCADOPAGO_ACCESS_TOKEN
+      }
     });
   } catch (error) {
     console.error('Erro no health check:', error);
@@ -328,6 +317,7 @@ if (process.env.NODE_ENV !== 'production') {
   app.listen(PORT, () => {
     console.log(`Servidor rodando na porta ${PORT}`);
     console.log('Ambiente:', process.env.NODE_ENV);
-    console.log('MercadoPago Access Token configurado:', !!process.env.MERCADO_PAGO_ACCESS_TOKEN);
+    console.log('MercadoPago Access Token configurado:', !!process.env.MERCADOPAGO_ACCESS_TOKEN);
+    console.log('MercadoPago configurado:', mercadopagoConfigured);
   });
 }
