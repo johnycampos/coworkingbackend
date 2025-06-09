@@ -279,7 +279,24 @@ app.get('/api/payment/:id', async (req, res) => {
 
 // Rota de health check
 app.get('/api/health', (req, res) => {
-  res.json({ status: 'ok' });
+  const healthcheck = {
+    status: 'ok',
+    timestamp: new Date().toISOString(),
+    uptime: process.uptime(),
+    environment: process.env.NODE_ENV || 'development',
+    memory: process.memoryUsage(),
+    mercadopago: {
+      configured: !!process.env.MERCADO_PAGO_ACCESS_TOKEN
+    }
+  };
+
+  try {
+    res.json(healthcheck);
+  } catch (error) {
+    healthcheck.status = 'error';
+    healthcheck.error = error.message;
+    res.status(500).json(healthcheck);
+  }
 });
 
 const PORT = process.env.PORT || 3001;
