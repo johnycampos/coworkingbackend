@@ -1,6 +1,5 @@
 const express = require('express');
 const cors = require('cors');
-const mercadopago = require('mercadopago');
 require('dotenv').config();
 
 const app = express();
@@ -17,61 +16,32 @@ app.use(cors());
 app.use(express.json());
 
 // Configuração do MercadoPago
-let mercadopagoConfigured = false;
-try {
-  // Token hardcoded para teste
-  const accessToken = 'APP_USR-3116777758882381-060722-f41a1e898893ace269b2fc4ca1db3d2a-517719294'; // Substitua pelo seu token real
-  
-  mercadopago.configure({
-    access_token: accessToken
-  });
-  
-  // Verifica se a configuração foi bem sucedida
-  if (mercadopago.preferences) {
-    mercadopagoConfigured = true;
-    console.log('MercadoPago configurado com sucesso');
-  } else {
-    console.error('MercadoPago não foi inicializado corretamente');
-  }
-} catch (error) {
-  console.error('Erro ao configurar MercadoPago:', error);
-}
+const MERCADOPAGO_ACCESS_TOKEN = 'APP_USR-3116777758882381-060722-f41a1e898893ace269b2fc4ca1db3d2a-517719294';
+const MERCADOPAGO_API_URL = 'https://api.mercadopago.com';
 
-// Middleware para verificar se o MercadoPago está configurado
-const checkMercadoPago = (req, res, next) => {
-  if (!mercadopagoConfigured) {
-    console.error('Tentativa de usar MercadoPago sem configuração');
-    return res.status(500).json({ 
-      error: 'MercadoPago não está configurado corretamente',
-      details: 'Verifique a configuração do MercadoPago'
+// Função para criar preferência usando a API REST
+async function createPreference(preferenceData) {
+  try {
+    const response = await fetch(`${MERCADOPAGO_API_URL}/checkout/preferences`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${MERCADOPAGO_ACCESS_TOKEN}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(preferenceData)
     });
-  }
-  next();
-};
 
-// Dados de teste para cartão Visa
-const TEST_CARD = {
-  number: '4235647728025682',
-  expirationMonth: '12',
-  expirationYear: '2025',
-  securityCode: '123',
-  cardholderName: 'APRO',
-  identification: {
-    type: 'CPF',
-    number: '12345678909'
-  }
-};
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.message || 'Erro ao criar preferência');
+    }
 
-// Middleware de tratamento de erros global
-app.use((err, req, res, next) => {
-  console.error('Erro global:', err);
-  console.error('Stack trace:', err.stack);
-  res.status(500).json({
-    error: 'Erro interno do servidor',
-    message: err.message,
-    stack: process.env.NODE_ENV === 'development' ? err.stack : undefined
-  });
-});
+    return await response.json();
+  } catch (error) {
+    console.error('Erro na chamada à API do MercadoPago:', error);
+    throw error;
+  }
+}
 
 // Rota de health check
 app.get('/api/health', (req, res) => {
@@ -79,11 +49,10 @@ app.get('/api/health', (req, res) => {
     console.log('Health check realizado');
     res.status(200).json({ 
       status: 'ok',
-      environment: process.env.NODE_ENV,
+      environment: process.env.NODE_ENV || 'development',
       timestamp: new Date().toISOString(),
       mercadopago: {
-        configured: mercadopagoConfigured,
-        preferences_available: !!mercadopago.preferences
+        token_defined: !!MERCADOPAGO_ACCESS_TOKEN
       }
     });
   } catch (error) {
@@ -93,7 +62,7 @@ app.get('/api/health', (req, res) => {
 });
 
 // Rota para criar preferência de pagamento
-app.post('/api/create-preference', checkMercadoPago, async (req, res) => {
+app.post('/api/create-preference', async (req, res) => {
   try {
     console.log('Criando preferência com dados:', req.body);
     const { amount, description, payer } = req.body;
@@ -139,26 +108,19 @@ app.post('/api/create-preference', checkMercadoPago, async (req, res) => {
     };
 
     console.log('Enviando preferência para MercadoPago:', preference);
-    
-    if (!mercadopago.preferences) {
-      throw new Error('MercadoPago preferences não está disponível');
-    }
-    
-    const response = await mercadopago.preferences.create(preference);
-    console.log('Preferência criada com sucesso:', response.body.id);
+    const response = await createPreference(preference);
+    console.log('Preferência criada com sucesso:', response.id);
     
     res.json({
-      id: response.body.id,
-      init_point: response.body.init_point
+      id: response.id,
+      init_point: response.init_point
     });
   } catch (error) {
     console.error('Erro ao criar preferência:', error);
     console.error('Stack trace:', error.stack);
     res.status(500).json({ 
       error: error.message,
-      details: error.response?.data || 'Sem detalhes adicionais',
-      mercadopago_configured: mercadopagoConfigured,
-      preferences_available: !!mercadopago.preferences
+      details: error.response?.data || 'Sem detalhes adicionais'
     });
   }
 });
@@ -314,7 +276,13 @@ app.post('/api/webhook', async (req, res) => {
     const { type, data } = req.body;
     
     if (type === 'payment') {
-      const payment = await mercadopago.payment.findById(data.id);
+      const response = await fetch(`${MERCADOPAGO_API_URL}/v1/payments/${data.id}`, {
+        headers: {
+          'Authorization': `Bearer ${MERCADOPAGO_ACCESS_TOKEN}`
+        }
+      });
+      
+      const payment = await response.json();
       console.log('Detalhes do pagamento:', payment);
     }
     
@@ -343,13 +311,10 @@ app.get('/api/payment/:id', async (req, res) => {
 // Exporta a aplicação para o Vercel
 module.exports = app;
 
-// Inicia o servidor apenas se não estiver em ambiente serverless
-if (process.env.NODE_ENV !== 'production') {
-  const PORT = process.env.PORT || 5000;
-  app.listen(PORT, () => {
-    console.log(`Servidor rodando na porta ${PORT}`);
-    console.log('Ambiente:', process.env.NODE_ENV);
-    console.log('MercadoPago configurado:', mercadopagoConfigured);
-    console.log('MercadoPago preferences disponível:', !!mercadopago.preferences);
-  });
-}
+// Inicia o servidor
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+  console.log(`Servidor rodando na porta ${PORT}`);
+  console.log('Ambiente:', process.env.NODE_ENV || 'development');
+  console.log('MercadoPago token configurado:', !!MERCADOPAGO_ACCESS_TOKEN);
+});
