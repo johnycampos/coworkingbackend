@@ -43,6 +43,51 @@ async function createPreference(preferenceData) {
   }
 }
 
+// Função para criar pagamento usando a API REST
+async function createPayment(paymentData) {
+  try {
+    const response = await fetch(`${MERCADOPAGO_API_URL}/v1/payments`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${MERCADOPAGO_ACCESS_TOKEN}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify(paymentData)
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.message || 'Erro ao criar pagamento');
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Erro na chamada à API do MercadoPago:', error);
+    throw error;
+  }
+}
+
+// Função para buscar pagamento usando a API REST
+async function getPayment(paymentId) {
+  try {
+    const response = await fetch(`${MERCADOPAGO_API_URL}/v1/payments/${paymentId}`, {
+      headers: {
+        'Authorization': `Bearer ${MERCADOPAGO_ACCESS_TOKEN}`
+      }
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.message || 'Erro ao buscar pagamento');
+    }
+
+    return await response.json();
+  } catch (error) {
+    console.error('Erro na chamada à API do MercadoPago:', error);
+    throw error;
+  }
+}
+
 // Rota de health check
 app.get('/api/health', (req, res) => {
   try {
@@ -269,6 +314,25 @@ app.post('/api/test-payment', async (req, res) => {
   }
 });
 
+// Rota para verificar status do pagamento
+app.get('/api/payment/:id', async (req, res) => {
+  try {
+    const paymentId = req.params.id;
+    console.log('Verificando status do pagamento:', paymentId);
+    
+    const payment = await getPayment(paymentId);
+    console.log('Status do pagamento:', payment.status);
+    
+    res.json(payment);
+  } catch (error) {
+    console.error('Erro ao verificar pagamento:', error);
+    res.status(500).json({ 
+      error: error.message,
+      details: error.response?.data || 'Sem detalhes adicionais'
+    });
+  }
+});
+
 // Rota para webhook
 app.post('/api/webhook', async (req, res) => {
   try {
@@ -276,13 +340,7 @@ app.post('/api/webhook', async (req, res) => {
     const { type, data } = req.body;
     
     if (type === 'payment') {
-      const response = await fetch(`${MERCADOPAGO_API_URL}/v1/payments/${data.id}`, {
-        headers: {
-          'Authorization': `Bearer ${MERCADOPAGO_ACCESS_TOKEN}`
-        }
-      });
-      
-      const payment = await response.json();
+      const payment = await getPayment(data.id);
       console.log('Detalhes do pagamento:', payment);
     }
     
@@ -294,17 +352,6 @@ app.post('/api/webhook', async (req, res) => {
       error: error.message,
       details: error.response?.data || 'Sem detalhes adicionais'
     });
-  }
-});
-
-// Rota para verificar status do pagamento
-app.get('/api/payment/:id', async (req, res) => {
-  try {
-    const payment = await mercadopago.payment.findById(req.params.id);
-    res.json(payment.body);
-  } catch (error) {
-    console.error('Erro ao verificar pagamento:', error);
-    res.status(500).json({ error: error.message });
   }
 });
 
