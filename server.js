@@ -25,7 +25,7 @@ if (!process.env.MERCADOPAGO_ACCESS_TOKEN) {
 let mercadopagoConfigured = false;
 try {
   mercadopago.configure({
-    access_token: process.env.MERCADOPAGO_ACCESS_TOKEN
+    access_token: 'APP_USR-3116777758882381-060722-f41a1e898893ace269b2fc4ca1db3d2a-517719294'
   });
   mercadopagoConfigured = true;
   console.log('MercadoPago configurado com sucesso');
