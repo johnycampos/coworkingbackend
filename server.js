@@ -1,13 +1,109 @@
-
 const express = require('express');
 const cors = require('cors');
 const { Resend } = require('resend');
+const { google } = require('googleapis');
 require('dotenv').config();
 
 const app = express();
 
 // Inicializar Resend
 const resend = new Resend(process.env.RESEND_API_KEY);
+
+// Configurar Google Sheets
+const googleAuth = new google.auth.GoogleAuth({
+  credentials: {
+    client_email: process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL,
+    private_key: process.env.GOOGLE_PRIVATE_KEY?.replace(/\\n/g, '\n'),
+  },
+  scopes: ['https://www.googleapis.com/auth/spreadsheets'],
+});
+
+const sheets = google.sheets({ version: 'v4', auth: googleAuth });
+
+// Função para salvar dados na planilha do Google
+async function saveToGoogleSheets(data) {
+  try {
+    const { nome, email, cpf, tipo, descricao, valor, referencia } = data;
+    
+    const now = new Date();
+    const dataFormatada = now.toLocaleString('pt-BR', {
+      timeZone: 'America/Sao_Paulo'
+    });
+
+    const values = [[
+      dataFormatada,
+      nome || 'N/A',
+      email || 'N/A', 
+      cpf || 'N/A',
+      tipo || 'N/A',
+      descricao || 'N/A',
+      valor || 'N/A',
+      referencia || 'N/A',
+      'Criado' // Status inicial
+    ]];
+
+    const resource = {
+      values,
+    };
+
+    const result = await sheets.spreadsheets.values.append({
+      spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+      range: 'A:I', // Colunas A até I
+      valueInputOption: 'USER_ENTERED',
+      resource,
+    });
+
+    console.log('Dados salvos na planilha:', result.data.updates);
+    return true;
+  } catch (error) {
+    console.error('Erro ao salvar na planilha:', error);
+    return false;
+  }
+}
+
+// Função para atualizar status na planilha
+async function updateStatusInSheet(referencia, novoStatus) {
+  try {
+    // Primeiro, buscar a linha com a referência
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+      range: 'A:I',
+    });
+
+    const rows = response.data.values;
+    if (!rows || rows.length <= 1) return false;
+
+    // Encontrar a linha com a referência
+    let rowIndex = -1;
+    for (let i = 1; i < rows.length; i++) { // Começar do índice 1 para pular o cabeçalho
+      if (rows[i][7] === referencia) { // Coluna H (índice 7) é a referência
+        rowIndex = i + 1; // +1 porque as planilhas começam do 1
+        break;
+      }
+    }
+
+    if (rowIndex === -1) {
+      console.log('Referência não encontrada na planilha:', referencia);
+      return false;
+    }
+
+    // Atualizar o status na coluna I
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+      range: `I${rowIndex}`, // Coluna I da linha encontrada
+      valueInputOption: 'USER_ENTERED',
+      resource: {
+        values: [[novoStatus]]
+      }
+    });
+
+    console.log(`Status atualizado para '${novoStatus}' na linha ${rowIndex}`);
+    return true;
+  } catch (error) {
+    console.error('Erro ao atualizar status na planilha:', error);
+    return false;
+  }
+}
 
 // Middleware para log de requisições
 app.use((req, res, next) => {
@@ -26,7 +122,6 @@ const MERCADOPAGO_API_URL = 'https://api.mercadopago.com';
 
 // Função para enviar email de confirmação
 async function sendConfirmationEmail(paymentData) {
-  console.log('Dados Email', paymentData);
   try {
     const { payer, description, transaction_amount, external_reference } = paymentData;
     
@@ -86,7 +181,7 @@ async function sendConfirmationEmail(paymentData) {
 
     const result = await resend.emails.send({
       from: process.env.FROM_EMAIL || 'coworking@exemplo.com',
-      to: 'johnycfreitas@gmail.com',
+      to: payer.email,
       subject: '✅ Reserva Confirmada - Coworking',
       html: emailHtml
     });
@@ -182,6 +277,10 @@ app.get('/api/health', (req, res) => {
       email: {
         resend_configured: !!process.env.RESEND_API_KEY,
         from_email: process.env.FROM_EMAIL || 'não configurado'
+      },
+      google_sheets: {
+        configured: !!(process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL && process.env.GOOGLE_PRIVATE_KEY && process.env.GOOGLE_SPREADSHEET_ID),
+        spreadsheet_id: process.env.GOOGLE_SPREADSHEET_ID || 'não configurado'
       }
     });
   } catch (error) {
@@ -263,9 +362,31 @@ app.post('/api/create-preference', async (req, res) => {
     const response = await createPreference(preference);
     console.log('Preferência criada com sucesso:', response.id);
     
+    // Salvar dados na planilha do Google
+    const dadosParaPlanilha = {
+      nome: payer?.name,
+      email: payer?.email,
+      cpf: payer?.identification?.number,
+      tipo: tipo,
+      descricao: description,
+      valor: `R$ ${amount.toFixed(2)}`,
+      referencia: preference.external_reference
+    };
+    
+    console.log('Salvando dados na planilha...');
+    const salvouNaPlanilha = await saveToGoogleSheets(dadosParaPlanilha);
+    
+    if (salvouNaPlanilha) {
+      console.log('Dados salvos na planilha com sucesso');
+    } else {
+      console.log('Erro ao salvar dados na planilha');
+    }
+    
     res.json({
       id: response.id,
-      init_point: response.init_point
+      init_point: response.init_point,
+      external_reference: preference.external_reference,
+      saved_to_sheet: salvouNaPlanilha
     }); 
   } catch (error) {
     console.error('Erro ao criar preferência:', error);
@@ -440,6 +561,18 @@ app.get('/api/payment/:id', async (req, res) => {
       } else {
         console.log('Falha ao enviar email de confirmação');
       }
+      
+      // Atualizar status na planilha
+      if (payment.external_reference) {
+        console.log('Atualizando status na planilha...');
+        const statusAtualizado = await updateStatusInSheet(payment.external_reference, 'Pago');
+        
+        if (statusAtualizado) {
+          console.log('Status atualizado na planilha');
+        } else {
+          console.log('Erro ao atualizar status na planilha');
+        }
+      }
     }
     
     res.json(payment);
@@ -472,6 +605,18 @@ app.post('/api/webhook', async (req, res) => {
         } else {
           console.log('Falha ao enviar email de confirmação via webhook');
         }
+        
+        // Atualizar status na planilha
+        if (payment.external_reference) {
+          console.log('Atualizando status na planilha via webhook...');
+          const statusAtualizado = await updateStatusInSheet(payment.external_reference, 'Pago');
+          
+          if (statusAtualizado) {
+            console.log('Status atualizado na planilha via webhook');
+          } else {
+            console.log('Erro ao atualizar status na planilha via webhook');
+          }
+        }
       }
     }
     
@@ -483,6 +628,33 @@ app.post('/api/webhook', async (req, res) => {
       error: error.message,
       details: error.response?.data || 'Sem detalhes adicionais'
     });
+  }
+});
+
+// Nova rota para testar integração com Google Sheets
+app.post('/api/test-sheets', async (req, res) => {
+  try {
+    const testData = {
+      nome: 'Teste da Silva',
+      email: 'teste@exemplo.com',
+      cpf: '123.456.789-00',
+      tipo: 'daily',
+      descricao: 'Teste de integração',
+      valor: 'R$ 10,00',
+      referencia: 'TEST-' + Date.now()
+    };
+
+    console.log('Testando salvamento na planilha...');
+    const saved = await saveToGoogleSheets(testData);
+    
+    if (saved) {
+      res.json({ success: true, message: 'Dados de teste salvos na planilha!' });
+    } else {
+      res.status(500).json({ success: false, message: 'Erro ao salvar na planilha' });
+    }
+  } catch (error) {
+    console.error('Erro no teste da planilha:', error);
+    res.status(500).json({ error: error.message });
   }
 });
 
@@ -528,4 +700,5 @@ app.listen(PORT, () => {
   console.log('Ambiente:', process.env.NODE_ENV || 'development');
   console.log('MercadoPago token configurado:', !!MERCADOPAGO_ACCESS_TOKEN);
   console.log('Resend API key configurado:', !!process.env.RESEND_API_KEY);
+  console.log('Google Sheets configurado:', !!(process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL && process.env.GOOGLE_PRIVATE_KEY && process.env.GOOGLE_SPREADSHEET_ID));
 });
