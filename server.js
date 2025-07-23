@@ -110,12 +110,38 @@ app.get('/api/health', (req, res) => {
 app.post('/api/create-preference', async (req, res) => {
   try {
     console.log('Criando preferência com dados:', req.body);
-    const { amount, description, payer } = req.body;
+    let { description, payer, tipo, dias, mes, horario } = req.body;
+
+    // Valores fixos
+    const VALOR_MENSAL = 1;
+    const VALOR_DIARIA = 1;
+    const VALOR_HORA = 1;
+
+    let amount = 0;
+
+    // Lógica de cálculo do valor
+    if (tipo === 'daily') {
+      // Se for diária, multiplica o valor da diária pela quantidade de dias
+      const quantidadeDias = Array.isArray(dias) ? dias.length : 1;
+      amount = VALOR_DIARIA * quantidadeDias;
+      description = `Reserva de coworking - Diária (${quantidadeDias} dia${quantidadeDias > 1 ? 's' : ''})`;
+    } else if (tipo === 'monthly') {
+      // Se for mensal, multiplica o valor do mês pela quantidade de meses
+      const quantidadeMes = mes || 1;
+      amount = VALOR_MENSAL * quantidadeMes;
+      description = `Reserva de coworking - Mensal (${quantidadeMes} mês${quantidadeMes > 1 ? 'es' : ''})`;
+    } else if (tipo === 'hourly') {
+      // Se for por hora, multiplica o valor da hora pela quantidade de horas e dias
+      const quantidadeHoras = horario || 1;
+      const quantidadeDias = Array.isArray(dias) ? dias.length : 1;
+      amount = VALOR_HORA * quantidadeHoras * quantidadeDias;
+      description = `Reserva de coworking - Por Hora (${quantidadeHoras} hora${quantidadeHoras > 1 ? 's' : ''} em ${quantidadeDias} dia${quantidadeDias > 1 ? 's' : ''})`;
+    }
 
     if (!amount || !description) {
       return res.status(400).json({ 
         error: 'Dados inválidos',
-        details: 'amount e description são obrigatórios'
+        details: 'Não foi possível calcular o valor do pagamento. Verifique os campos enviados.'
       });
     }
 
@@ -159,7 +185,7 @@ app.post('/api/create-preference', async (req, res) => {
     res.json({
       id: response.id,
       init_point: response.init_point
-    });
+    }); 
   } catch (error) {
     console.error('Erro ao criar preferência:', error);
     console.error('Stack trace:', error.stack);
