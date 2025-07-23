@@ -163,8 +163,8 @@ app.post('/api/create-preference', async (req, res) => {
         }
       },
       back_urls: {
-        success: "https://coworking-navy.vercel.app/success",
-        failure: "https://coworking-navy.vercel.app/failure",
+        success: "https://coworking-navy.vercel.app/payment-success",
+        failure: "https://coworking-navy.vercel.app/pending",
         pending: "https://coworking-navy.vercel.app/pending"
       },
       auto_return: "approved",
