@@ -61,6 +61,46 @@ async function saveToGoogleSheets(data) {
   }
 }
 
+// Função para buscar email na planilha pela referência
+async function getEmailByReference(referencia) {
+  try {
+    console.log('Buscando email para referência:', referencia);
+    
+    // Buscar todos os dados da planilha
+    const response = await sheets.spreadsheets.values.get({
+      spreadsheetId: process.env.GOOGLE_SPREADSHEET_ID,
+      range: 'A:I',
+    });
+
+    const rows = response.data.values;
+    if (!rows || rows.length <= 1) {
+      console.log('Planilha vazia ou sem dados');
+      return null;
+    }
+
+    // Encontrar a linha com a referência
+    for (let i = 1; i < rows.length; i++) { // Começar do índice 1 para pular o cabeçalho
+      const row = rows[i];
+      if (row[7] === referencia) { // Coluna H (índice 7) é a referência
+        const email = row[2]; // Coluna C (índice 2) é o email
+        const nome = row[1]; // Coluna B (índice 1) é o nome
+        
+        console.log('Email encontrado:', email, 'para referência:', referencia);
+        return {
+          email: email,
+          nome: nome
+        };
+      }
+    }
+
+    console.log('Referência não encontrada na planilha:', referencia);
+    return null;
+  } catch (error) {
+    console.error('Erro ao buscar email na planilha:', error);
+    return null;
+  }
+}
+
 // Função para atualizar status na planilha
 async function updateStatusInSheet(referencia, novoStatus) {
   try {
@@ -123,12 +163,26 @@ const MERCADOPAGO_API_URL = 'https://api.mercadopago.com';
 // Função para enviar email de confirmação
 async function sendConfirmationEmail(paymentData) {
   try {
-    const { payer, description, transaction_amount, external_reference } = paymentData;
+    const { description, transaction_amount, external_reference } = paymentData;
     
-    if (!payer?.email) {
-      console.log('Email do pagador não encontrado');
+    if (!external_reference) {
+      console.log('Referência externa não encontrada no pagamento');
       return false;
     }
+
+    // Buscar email na planilha usando a referência
+    const dadosCliente = await getEmailByReference(external_reference);
+    
+    if (!dadosCliente || !dadosCliente.email) {
+      console.log('Email do cliente não encontrado na planilha para referência:', external_reference);
+      return false;
+    }
+
+    const { email, nome } = dadosCliente;
+    console.log('Enviando email de confirmação para:', email);
+
+    const whatsappMessage = encodeURIComponent(`Olá! Minha reserva foi confirmada. Referência: ${external_reference}`);
+    const whatsappLink = `https://wa.me/5521965702348?text=${whatsappMessage}`;
 
     const emailHtml = `
       <!DOCTYPE html>
@@ -141,6 +195,25 @@ async function sendConfirmationEmail(paymentData) {
           .header { background-color: #4CAF50; color: white; padding: 20px; text-align: center; }
           .content { padding: 20px; background-color: #f9f9f9; }
           .details { background-color: white; padding: 15px; margin: 15px 0; border-left: 4px solid #4CAF50; }
+          .whatsapp-button { 
+            display: inline-block;
+            background-color: #25D366;
+            color: white;
+            padding: 15px 30px;
+            text-decoration: none;
+            border-radius: 25px;
+            font-weight: bold;
+            margin: 20px 0;
+            text-align: center;
+            transition: background-color 0.3s;
+          }
+          .whatsapp-button:hover {
+            background-color: #1ea952;
+          }
+          .button-container {
+            text-align: center;
+            margin: 20px 0;
+          }
           .footer { text-align: center; padding: 20px; color: #666; font-size: 12px; }
         </style>
       </head>
@@ -151,7 +224,7 @@ async function sendConfirmationEmail(paymentData) {
           </div>
           
           <div class="content">
-            <h2>Olá, ${payer.first_name || 'Cliente'}!</h2>
+            <h2>Olá, ${nome || 'Cliente'}!</h2>
             
             <p>Seu pagamento foi processado com sucesso! Sua reserva no coworking está confirmada.</p>
             
@@ -160,12 +233,15 @@ async function sendConfirmationEmail(paymentData) {
               <p><strong>Descrição:</strong> ${description}</p>
               <p><strong>Valor:</strong> R$ ${transaction_amount?.toFixed(2)}</p>
               <p><strong>Referência:</strong> ${external_reference}</p>
-              <p><strong>Email:</strong> ${payer.email}</p>
+              <p><strong>Email:</strong> ${email}</p>
             </div>
             
-            <p>Em breve você receberá mais informações sobre como acessar o espaço.</p>
-            
-            <p>Caso tenha alguma dúvida, entre em contato conosco.</p>
+            <div class="button-container">
+              <p><strong>Precisa de ajuda ou tem alguma dúvida?</strong></p>
+              <a href="${whatsappLink}" class="whatsapp-button">
+                📱 Falar no WhatsApp
+              </a>
+            </div>
             
             <p>Obrigado por escolher nosso coworking!</p>
           </div>
@@ -181,7 +257,7 @@ async function sendConfirmationEmail(paymentData) {
 
     const result = await resend.emails.send({
       from: process.env.FROM_EMAIL || 'coworking@exemplo.com',
-      to: payer.email,
+      to: email,
       subject: '✅ Reserva Confirmada - Coworking',
       html: emailHtml
     });
@@ -550,16 +626,17 @@ app.get('/api/payment/:id', async (req, res) => {
     
     const payment = await getPayment(paymentId);
     console.log('Status do pagamento:', payment.status);
+    console.log('Referência externa:', payment.external_reference);
     
     // Se o pagamento foi aprovado, enviar email de confirmação
     if (payment.status === 'approved') {
-      console.log('Pagamento aprovado, enviando email de confirmação...');
+      console.log('Pagamento aprovado, buscando email na planilha e enviando confirmação...');
       const emailSent = await sendConfirmationEmail(payment);
       
       if (emailSent) {
         console.log('Email de confirmação enviado com sucesso');
       } else {
-        console.log('Falha ao enviar email de confirmação');
+        console.log('Falha ao enviar email de confirmação - email não encontrado na planilha ou erro no envio');
       }
       
       // Atualizar status na planilha
@@ -594,16 +671,17 @@ app.post('/api/webhook', async (req, res) => {
     if (type === 'payment') {
       const payment = await getPayment(data.id);
       console.log('Detalhes do pagamento via webhook:', payment);
+      console.log('Referência externa via webhook:', payment.external_reference);
       
       // Se o pagamento foi aprovado, enviar email de confirmação
       if (payment.status === 'approved') {
-        console.log('Pagamento aprovado via webhook, enviando email...');
+        console.log('Pagamento aprovado via webhook, buscando email na planilha...');
         const emailSent = await sendConfirmationEmail(payment);
         
         if (emailSent) {
           console.log('Email de confirmação enviado com sucesso via webhook');
         } else {
-          console.log('Falha ao enviar email de confirmação via webhook');
+          console.log('Falha ao enviar email de confirmação via webhook - email não encontrado na planilha ou erro no envio');
         }
         
         // Atualizar status na planilha
