@@ -1,8 +1,13 @@
+
 const express = require('express');
 const cors = require('cors');
+const { Resend } = require('resend');
 require('dotenv').config();
 
 const app = express();
+
+// Inicializar Resend
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 // Middleware para log de requisições
 app.use((req, res, next) => {
@@ -18,6 +23,81 @@ app.use(express.json());
 // Configuração do MercadoPago
 const MERCADOPAGO_ACCESS_TOKEN = 'APP_USR-3116777758882381-060722-f41a1e898893ace269b2fc4ca1db3d2a-517719294';
 const MERCADOPAGO_API_URL = 'https://api.mercadopago.com';
+
+// Função para enviar email de confirmação
+async function sendConfirmationEmail(paymentData) {
+  console.log('Dados Email', paymentData);
+  try {
+    const { payer, description, transaction_amount, external_reference } = paymentData;
+    
+    if (!payer?.email) {
+      console.log('Email do pagador não encontrado');
+      return false;
+    }
+
+    const emailHtml = `
+      <!DOCTYPE html>
+      <html>
+      <head>
+        <meta charset="utf-8">
+        <style>
+          body { font-family: Arial, sans-serif; line-height: 1.6; color: #333; }
+          .container { max-width: 600px; margin: 0 auto; padding: 20px; }
+          .header { background-color: #4CAF50; color: white; padding: 20px; text-align: center; }
+          .content { padding: 20px; background-color: #f9f9f9; }
+          .details { background-color: white; padding: 15px; margin: 15px 0; border-left: 4px solid #4CAF50; }
+          .footer { text-align: center; padding: 20px; color: #666; font-size: 12px; }
+        </style>
+      </head>
+      <body>
+        <div class="container">
+          <div class="header">
+            <h1>🎉 Pagamento Confirmado!</h1>
+          </div>
+          
+          <div class="content">
+            <h2>Olá, ${payer.first_name || 'Cliente'}!</h2>
+            
+            <p>Seu pagamento foi processado com sucesso! Sua reserva no coworking está confirmada.</p>
+            
+            <div class="details">
+              <h3>Detalhes da Reserva:</h3>
+              <p><strong>Descrição:</strong> ${description}</p>
+              <p><strong>Valor:</strong> R$ ${transaction_amount?.toFixed(2)}</p>
+              <p><strong>Referência:</strong> ${external_reference}</p>
+              <p><strong>Email:</strong> ${payer.email}</p>
+            </div>
+            
+            <p>Em breve você receberá mais informações sobre como acessar o espaço.</p>
+            
+            <p>Caso tenha alguma dúvida, entre em contato conosco.</p>
+            
+            <p>Obrigado por escolher nosso coworking!</p>
+          </div>
+          
+          <div class="footer">
+            <p>Este é um email automático, não responda.</p>
+            <p>Coworking - Espaços colaborativos</p>
+          </div>
+        </div>
+      </body>
+      </html>
+    `;
+
+    const result = await resend.emails.send({
+      from: process.env.FROM_EMAIL || 'coworking@exemplo.com',
+      to: 'johnycfreitas@gmail.com',
+      subject: '✅ Reserva Confirmada - Coworking',
+      html: emailHtml
+    });
+
+    console.log('Email enviado com sucesso:', result);
+    return true;
+  } catch (error) {
+    console.error('Erro ao enviar email:', error);
+    return false;
+  }
+}
 
 // Função para criar preferência usando a API REST
 async function createPreference(preferenceData) {
@@ -98,6 +178,10 @@ app.get('/api/health', (req, res) => {
       timestamp: new Date().toISOString(),
       mercadopago: {
         token_defined: !!MERCADOPAGO_ACCESS_TOKEN
+      },
+      email: {
+        resend_configured: !!process.env.RESEND_API_KEY,
+        from_email: process.env.FROM_EMAIL || 'não configurado'
       }
     });
   } catch (error) {
@@ -121,17 +205,14 @@ app.post('/api/create-preference', async (req, res) => {
 
     // Lógica de cálculo do valor
     if (tipo === 'daily') {
-      // Se for diária, multiplica o valor da diária pela quantidade de dias
       const quantidadeDias = Array.isArray(dias) ? dias.length : 1;
       amount = VALOR_DIARIA * quantidadeDias;
       description = `Reserva de coworking - Diária (${quantidadeDias} dia${quantidadeDias > 1 ? 's' : ''})`;
     } else if (tipo === 'monthly') {
-      // Se for mensal, multiplica o valor do mês pela quantidade de meses
       const quantidadeMes = mes || 1;
       amount = VALOR_MENSAL * quantidadeMes;
       description = `Reserva de coworking - Mensal (${quantidadeMes} mês${quantidadeMes > 1 ? 'es' : ''})`;
     } else if (tipo === 'hourly') {
-      // Se for por hora, multiplica o valor da hora pela quantidade de horas e dias
       const quantidadeHoras = horario || 1;
       const quantidadeDias = Array.isArray(dias) ? dias.length : 1;
       amount = VALOR_HORA * quantidadeHoras * quantidadeDias;
@@ -340,7 +421,7 @@ app.post('/api/test-payment', async (req, res) => {
   }
 });
 
-// Rota para verificar status do pagamento
+// Rota para verificar status do pagamento - MODIFICADA PARA ENVIAR EMAIL
 app.get('/api/payment/:id', async (req, res) => {
   try {
     const paymentId = req.params.id;
@@ -348,6 +429,18 @@ app.get('/api/payment/:id', async (req, res) => {
     
     const payment = await getPayment(paymentId);
     console.log('Status do pagamento:', payment.status);
+    
+    // Se o pagamento foi aprovado, enviar email de confirmação
+    if (payment.status === 'approved') {
+      console.log('Pagamento aprovado, enviando email de confirmação...');
+      const emailSent = await sendConfirmationEmail(payment);
+      
+      if (emailSent) {
+        console.log('Email de confirmação enviado com sucesso');
+      } else {
+        console.log('Falha ao enviar email de confirmação');
+      }
+    }
     
     res.json(payment);
   } catch (error) {
@@ -359,7 +452,7 @@ app.get('/api/payment/:id', async (req, res) => {
   }
 });
 
-// Rota para webhook
+// Rota para webhook - MODIFICADA PARA ENVIAR EMAIL
 app.post('/api/webhook', async (req, res) => {
   try {
     console.log('Webhook recebido:', req.body);
@@ -367,7 +460,19 @@ app.post('/api/webhook', async (req, res) => {
     
     if (type === 'payment') {
       const payment = await getPayment(data.id);
-      console.log('Detalhes do pagamento:', payment);
+      console.log('Detalhes do pagamento via webhook:', payment);
+      
+      // Se o pagamento foi aprovado, enviar email de confirmação
+      if (payment.status === 'approved') {
+        console.log('Pagamento aprovado via webhook, enviando email...');
+        const emailSent = await sendConfirmationEmail(payment);
+        
+        if (emailSent) {
+          console.log('Email de confirmação enviado com sucesso via webhook');
+        } else {
+          console.log('Falha ao enviar email de confirmação via webhook');
+        }
+      }
     }
     
     res.status(200).send('OK');
@@ -381,6 +486,38 @@ app.post('/api/webhook', async (req, res) => {
   }
 });
 
+// Nova rota para testar envio de email
+app.post('/api/test-email', async (req, res) => {
+  try {
+    const { email } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({ error: 'Email é obrigatório' });
+    }
+
+    const testPayment = {
+      payer: {
+        email: email,
+        first_name: 'Teste'
+      },
+      description: 'Teste de envio de email',
+      transaction_amount: 10.00,
+      external_reference: 'TEST-' + Date.now()
+    };
+
+    const emailSent = await sendConfirmationEmail(testPayment);
+    
+    if (emailSent) {
+      res.json({ success: true, message: 'Email de teste enviado com sucesso!' });
+    } else {
+      res.status(500).json({ success: false, message: 'Falha ao enviar email de teste' });
+    }
+  } catch (error) {
+    console.error('Erro ao testar email:', error);
+    res.status(500).json({ error: error.message });
+  }
+});
+
 // Exporta a aplicação para o Vercel
 module.exports = app;
 
@@ -390,4 +527,5 @@ app.listen(PORT, () => {
   console.log(`Servidor rodando na porta ${PORT}`);
   console.log('Ambiente:', process.env.NODE_ENV || 'development');
   console.log('MercadoPago token configurado:', !!MERCADOPAGO_ACCESS_TOKEN);
+  console.log('Resend API key configurado:', !!process.env.RESEND_API_KEY);
 });
