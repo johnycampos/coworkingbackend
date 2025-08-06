@@ -182,7 +182,7 @@ async function sendConfirmationEmail(paymentData) {
     console.log('Enviando email de confirmação para:', email);
 
     const whatsappMessage = encodeURIComponent(`Olá! Minha reserva foi confirmada. Referência: ${external_reference}`);
-    const whatsappLink = `https://wa.me/5521965702348?text=${whatsappMessage}`;
+    const whatsappLink = `https://wa.me/5521995753900?text=${whatsappMessage}`;
 
     const emailHtml = `
       <!DOCTYPE html>
